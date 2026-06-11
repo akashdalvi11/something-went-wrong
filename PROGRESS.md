@@ -5,8 +5,8 @@ to end users using Dynatrace telemetry. **Read DESIGN.md first** — it holds
 the architecture, the two-phase explanation flow, and the phased plan.
 This file holds the current implementation state.
 
-**Status: Phase 0 ✅, Phase 1 ✅ (2026-06-11). Next: Phase 2 (failure
-injection + incident module, DESIGN.md §5/§6).**
+**Status: Phase 0 ✅, Phase 1 ✅, Phase 2 ✅ (2026-06-11). Next: Phase 3
+(the explainer agent, locally — DESIGN.md §6 Phase 3).**
 
 ## What exists and runs (all local, all Docker except tools)
 
@@ -48,6 +48,39 @@ injection + incident module, DESIGN.md §5/§6).**
 - User conventions: runtime deps (Node/Medusa/Postgres) ONLY in Docker; CLI
   tools (gcloud/python/git) native; Python in venv.
 
+## Phase 2 — failure injection + incident module (done, verified)
+
+All inside `backend/apps/backend/`:
+
+- **Incident module** `src/modules/incident/` (registered in
+  `medusa-config.ts`): `incident` table (migration applied) with id
+  (`inc_<uuid>`, doubles as public incident_id), trace_id/span_id, status
+  `pending|preliminary|confirmed`, error type/message/stack, route, method,
+  scenario, request_context json, explanation json (agent fills in later).
+- **Global error handler** `src/lib/incident-error-handler.ts`, wired via
+  `defineMiddlewares({ errorHandler })` in `src/api/middlewares.ts`:
+  intercepts would-be 5xx (mirrors core type→status map; chaos-tagged
+  requests are always incidents), records the exception on the active OTel
+  span, persists the incident fire-and-forget, responds with the generic
+  error JSON + `incident_id`. 4xx delegate to the core handler.
+- **Chaos scenarios** `src/lib/chaos.ts`, in-memory flags (env defaults
+  `CHAOS_*`), runtime toggle `GET/POST /admin/chaos` (AUTHENTICATE=false,
+  prototype): 1) `promo_crash` — promo code `SAVE-NULL` on cart update hits
+  a real null-deref TypeError (default ON); 2) `payment_timeout` — payment
+  session creation fails after a 3s fake-PSP timeout; 3) `inventory_race` —
+  cart completion zeroes the cart items' stock first, Medusa's own inventory
+  check then fails. Restore stock after demos — BOTH columns (Medusa reads
+  the raw one): `UPDATE inventory_level SET stocked_quantity=1000000,
+  raw_stocked_quantity='{"value": "1000000", "precision": 20}'::jsonb WHERE
+  stocked_quantity=0;`
+- **Polling route** `GET /store/explanations/{incident_id}` (publishable key
+  required) → `{incident_id, status, fault, user_message, created_at}` only —
+  internals never leave the backend.
+- ✅ Verified all 3 scenarios: 500 + incident_id returned, incident rows have
+  real trace_ids, and the scenario-1 trace is queryable in Grail by
+  `trace.id == toUid("…")` with span status error + exception span event
+  (type, message, full stack) on `middleware: promo_crash_middleware`.
+
 ## Landmines already hit and fixed (do not re-debug)
 
 All four surface as blank pages or masked `KnexTimeoutError` (Medusa's
@@ -69,17 +102,30 @@ All four surface as blank pages or masked `KnexTimeoutError` (Medusa's
    `HMR_BIND_HOST=0.0.0.0`, `HMR_HOST=localhost`, `HMR_CLIENT_PORT=24678` +
    port published in compose.
 
+5. **Failure traces silently dropped**: Medusa's `registerOtel` uses a
+   `SimpleSpanProcessor` — one HTTPS export per span as it ends. A crashing
+   request ends its whole span stack at once and blows the exporter's
+   concurrent-export limit ("Concurrent export limit reached" at
+   OTEL_LOG_LEVEL=debug); successful traces mostly survived, failure traces
+   never reached Dynatrace. Fix in `instrumentation.ts`: pass
+   `spanProcessors: [new BatchSpanProcessor(exporter)]` to `registerOtel`
+   (NodeSDK prefers `spanProcessors`; also makes OTEL_BSP_* env vars apply).
+   DQL note: `trace.id` is a uid — filter with
+   `trace.id == toUid("<hex>")`, a plain string never matches.
+
 Debugging tip that cracked 1+2: a `--require` shim patching `tarn.Pool.acquire`
 and `pg.Client.connect` to log real errors (deleted; recreate if needed).
 
-## Phase 2 scope (next session starts here)
+## Phase 3 scope (next session starts here)
 
-Per DESIGN.md §5 + §6 Phase 2, inside `backend/apps/backend/`:
-1. Failure-injection scenarios 1–3 (promo `SAVE-NULL` null-deref, payment
-   provider timeout, inventory race) behind toggles.
-2. Incident module part 1: global error-handling middleware on unhandled 5xx —
-   capture `trace_id` from active OTel context + exception (type/message/
-   stack), generate `incident_id`, persist incident row (status `pending`) in
-   Medusa's Postgres, return generic error + `incident_id` to the FE.
-3. Verify: trigger scenario 1 → exception span event visible in Dynatrace via
-   `verify_mcp.py` DQL by `trace.id`; incident row matches; FE gets incident_id.
+Per DESIGN.md §6 Phase 3, in `agent/`:
+1. Phase A first: ADK `LlmAgent` (Gemini via Vertex AI), `phase: "A"` branch —
+   one LLM pass over an exception payload → structured preliminary JSON
+   (output schema from DESIGN.md §3). No MCP involved.
+2. Then Phase B: `McpToolset` + `StreamableHTTPConnectionParams` → the
+   Dynatrace-hosted remote MCP server. Investigation prompt + fault rubric +
+   retry-until-trace-appears loop (DQL templates: `fetch spans | filter
+   trace.id == toUid("…")`, remember the toUid!).
+3. Verify on real Phase 2 incidents from the `incident` table via CLI /
+   `adk web`: preliminary JSON in seconds; correct fault class + sane
+   user_message for all scenarios once the trace is found.
