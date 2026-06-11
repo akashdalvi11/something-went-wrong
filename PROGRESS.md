@@ -146,6 +146,25 @@ and `pg.Client.connect` to log real errors (deleted; recreate if needed).
   degrades gracefully (notes the gap in internal_report). Add the scope to
   the Platform Token in the Dynatrace UI to enable the problems cross-check.
 
+## Extras (2026-06-11, after Phase 3)
+
+- **New Platform Token** with `storage:events:read` (+ entities/app-engine
+  scopes + `document:documents:write`): the agent's `query-problems`
+  cross-check now works — no more "insufficient permissions" in reports.
+- **Agent observability**: `agent/explainer/telemetry.py` registers a global
+  OTel TracerProvider → same Dynatrace OTLP endpoint as Medusa, service
+  `explainer-agent`. ADK emits spans for everything (invocation, `call_llm`,
+  `generate_content gemini-2.5-flash` with `gen_ai.usage.*` token counts,
+  `execute_tool …`); the driver wraps runs in an `explain_incident` root span
+  carrying `incident.id`, `incident.phase`, `incident.store_trace_id` —
+  joinable in DQL to the store failure trace it investigates.
+- **Dashboard** `dynatrace/dashboard.json` ("Something Went Wrong — store +
+  explainer agent", uploaded via Document API, id
+  1f67da2b-bb2d-4e93-ad81-1456a6220674): store health (failures, top failing
+  ops, recent exceptions + trace ids, p95) + agent ops (runs, time-to-
+  explanation by phase, token usage, tool calls). All tile DQL validated via
+  MCP. Re-upload after edits: POST /platform/document/v1/documents.
+
 ## Phase 4 scope (next session starts here)
 
 Per DESIGN.md §6 Phase 4:

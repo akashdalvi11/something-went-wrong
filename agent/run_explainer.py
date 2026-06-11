@@ -18,8 +18,10 @@ import sys
 import time
 
 from google.genai import types
+from opentelemetry import trace
 
 from explainer.agent import Explanation, root_agent
+from explainer.telemetry import flush_tracing, setup_tracing
 
 PSQL = [
     "docker", "compose", "exec", "-T", "postgres",
@@ -68,6 +70,9 @@ async def main() -> None:
     print(f"--- input (phase {args.phase}) ---")
     print(json.dumps(payload, indent=2, default=str)[:1500])
 
+    # The agent's own traces go to the same Dynatrace tenant it investigates.
+    setup_tracing()
+
     # Imported late: InMemoryRunner pulls in the full ADK surface (~seconds).
     from google.adk.runners import InMemoryRunner
 
@@ -78,25 +83,33 @@ async def main() -> None:
 
     started = time.monotonic()
     final_text = None
-    async for event in runner.run_async(
-        user_id="local",
-        session_id=session.id,
-        new_message=types.Content(
-            role="user", parts=[types.Part(text=json.dumps(payload, default=str))]
-        ),
-    ):
-        elapsed = time.monotonic() - started
-        for part in (event.content and event.content.parts) or []:
-            if part.function_call:
-                arg_preview = json.dumps(part.function_call.args or {})[:200]
-                print(f"[{elapsed:6.1f}s] tool call: {part.function_call.name}({arg_preview})")
-            elif part.function_response:
-                print(f"[{elapsed:6.1f}s] tool done: {part.function_response.name}")
-        if event.is_final_response() and event.content and event.content.parts:
-            text = "".join(p.text or "" for p in event.content.parts)
-            if text.strip():
-                final_text = text
+    # Root span carrying the correlation keys: incident id, phase, and the
+    # trace id of the store failure being investigated — joinable in DQL.
+    tracer = trace.get_tracer("explainer.driver")
+    with tracer.start_as_current_span("explain_incident") as root_span:
+        root_span.set_attribute("incident.id", str(incident.get("incident_id")))
+        root_span.set_attribute("incident.phase", args.phase)
+        root_span.set_attribute("incident.store_trace_id", str(incident.get("trace_id")))
+        async for event in runner.run_async(
+            user_id="local",
+            session_id=session.id,
+            new_message=types.Content(
+                role="user", parts=[types.Part(text=json.dumps(payload, default=str))]
+            ),
+        ):
+            elapsed = time.monotonic() - started
+            for part in (event.content and event.content.parts) or []:
+                if part.function_call:
+                    arg_preview = json.dumps(part.function_call.args or {})[:200]
+                    print(f"[{elapsed:6.1f}s] tool call: {part.function_call.name}({arg_preview})")
+                elif part.function_response:
+                    print(f"[{elapsed:6.1f}s] tool done: {part.function_response.name}")
+            if event.is_final_response() and event.content and event.content.parts:
+                text = "".join(p.text or "" for p in event.content.parts)
+                if text.strip():
+                    final_text = text
 
+    flush_tracing()
     elapsed = time.monotonic() - started
     if not final_text:
         sys.exit("No final response from the agent.")
