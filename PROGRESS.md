@@ -5,8 +5,8 @@ to end users using Dynatrace telemetry. **Read DESIGN.md first** — it holds
 the architecture, the two-phase explanation flow, and the phased plan.
 This file holds the current implementation state.
 
-**Status: Phase 0 ✅, Phase 1 ✅, Phase 2 ✅ (2026-06-11). Next: Phase 3
-(the explainer agent, locally — DESIGN.md §6 Phase 3).**
+**Status: Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 3 ✅ (2026-06-11). Next:
+Phase 4 (end-to-end glue — DESIGN.md §6 Phase 4).**
 
 ## What exists and runs (all local, all Docker except tools)
 
@@ -116,16 +116,46 @@ All four surface as blank pages or masked `KnexTimeoutError` (Medusa's
 Debugging tip that cracked 1+2: a `--require` shim patching `tarn.Pool.acquire`
 and `pg.Client.connect` to log real errors (deleted; recreate if needed).
 
-## Phase 3 scope (next session starts here)
+## Phase 3 — explainer agent, locally (done, verified)
 
-Per DESIGN.md §6 Phase 3, in `agent/`:
-1. Phase A first: ADK `LlmAgent` (Gemini via Vertex AI), `phase: "A"` branch —
-   one LLM pass over an exception payload → structured preliminary JSON
-   (output schema from DESIGN.md §3). No MCP involved.
-2. Then Phase B: `McpToolset` + `StreamableHTTPConnectionParams` → the
-   Dynatrace-hosted remote MCP server. Investigation prompt + fault rubric +
-   retry-until-trace-appears loop (DQL templates: `fetch spans | filter
-   trace.id == toUid("…")`, remember the toUid!).
-3. Verify on real Phase 2 incidents from the `incident` table via CLI /
-   `adk web`: preliminary JSON in seconds; correct fault class + sane
-   user_message for all scenarios once the trace is found.
+- **Agent** `agent/explainer/agent.py`: single ADK `LlmAgent`
+  (`gemini-2.5-flash` via Vertex AI), input `{phase: "A"|"B", incident}`,
+  prompt branches. ADK 2.x supports `output_schema` (pydantic `Explanation`,
+  DESIGN.md §3 shape) TOGETHER with tools. Tools: `McpToolset` →
+  Dynatrace-hosted remote MCP (`execute-dql`, `query-problems`,
+  `get-problem-by-id`) + a `wait_for_ingest` sleep tool for the
+  retry-until-trace-appears loop.
+- **Driver** `agent/run_explainer.py`: `--incident-id inc_…|--latest|--json f`
+  + `--phase A|B`; pulls the row from dockerized Postgres (excludes the chaos
+  `scenario` tag — agent must work it out from telemetry), prints tool calls,
+  validates the output against the schema.
+- ✅ Verified on fresh incidents of all 3 scenarios: phase A ≈10s validated
+  preliminary JSON; phase B ≈30s: correct DQL with toUid on first try,
+  reads exception span events, sane user_message + fault per scenario
+  (1 promo: BOTH, names the promo code from request_context; 2 payment:
+  SYSTEM, high confidence, "no charge was made"; 3 inventory: SYSTEM).
+- Incident capture now whitelists safe request fields into request_context
+  (`promo_codes`, `payment_provider`) — that's what lets the agent reach the
+  BOTH verdict for scenario 1. Scenario 2's middleware now awaits its fake
+  timeout so the exception event lands on a live span (a bare setTimeout
+  ended the span before the error handler could record it).
+- Vertex auth: ADC via `gcloud auth application-default login` (done, quota
+  project devpost-hackathon-11). `GCP_PROJECT_ID` now filled in `.env`.
+- ⚠️ Platform Token gap: `query-problems` AND `fetch dt.davis.problems` fail
+  with insufficient permission — token lacks `storage:events:read`. Agent
+  degrades gracefully (notes the gap in internal_report). Add the scope to
+  the Platform Token in the Dynatrace UI to enable the problems cross-check.
+
+## Phase 4 scope (next session starts here)
+
+Per DESIGN.md §6 Phase 4:
+1. Incident module part 2: after persisting the incident, invoke the agent
+   in the background — phase A then phase B (locally via `adk api_server
+   agent/` on the host; Medusa reaches it at `host.docker.internal`), store
+   results in `incident.explanation`, status `pending → preliminary →
+   confirmed`, sanitization deny-list pass before storing.
+2. Storefront `<SomethingWentWrong incidentId/>` component: polls
+   `GET /store/explanations/{id}`, shows preliminary within seconds,
+   upgrades to confirmed (fault classification visually distinct).
+3. ✅ Verify: checkout with SAVE-NULL in the browser → grounded preliminary
+   ~5s → confirmed verdict ~30-60s, no human in the loop.

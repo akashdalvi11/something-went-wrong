@@ -85,6 +85,10 @@ export function incidentErrorHandler(
       scenario: scenario ?? null,
       request_context: {
         params: req.params ?? {},
+        // Whitelisted, PII-free request fields the agent may reason about.
+        // Never the whole body.
+        promo_codes: (req.body as any)?.promo_codes ?? undefined,
+        payment_provider: (req.body as any)?.provider_id ?? undefined,
       },
     }
 

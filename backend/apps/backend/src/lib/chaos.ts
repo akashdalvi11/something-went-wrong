@@ -65,11 +65,15 @@ export function promoCrashMiddleware(
 
 // Scenario 2 — payment provider timeout (fault: SYSTEM).
 // Simulates the PSP client: the provider hangs past our 3s client timeout,
-// the client gives up and surfaces a timeout error. next(err) because
-// Express 4 does not route rejected async middlewares to the error handler.
+// the client gives up and surfaces a timeout error. Awaiting the sleep keeps
+// the middleware's OTel span open, so the error handler can attach the
+// exception event to a live span (a fire-and-forget setTimeout would end the
+// span first and the exception would never reach Dynatrace). next(err)
+// because Express 4 does not route rejected async middlewares to the error
+// handler.
 const PAYMENT_CLIENT_TIMEOUT_MS = 3_000
 
-export function paymentTimeoutMiddleware(
+export async function paymentTimeoutMiddleware(
   req: MedusaRequest,
   res: MedusaResponse,
   next: MedusaNextFunction
@@ -78,14 +82,13 @@ export function paymentTimeoutMiddleware(
     return next()
   }
   markScenario(req, "payment_timeout")
-  setTimeout(() => {
-    const err = new Error(
-      `Payment provider did not respond within ${PAYMENT_CLIENT_TIMEOUT_MS}ms ` +
-        `(provider: fakepay, operation: createPaymentSession). No charge was made.`
-    )
-    err.name = "PaymentProviderTimeoutError"
-    next(err)
-  }, PAYMENT_CLIENT_TIMEOUT_MS)
+  await new Promise((resolve) => setTimeout(resolve, PAYMENT_CLIENT_TIMEOUT_MS))
+  const err = new Error(
+    `Payment provider did not respond within ${PAYMENT_CLIENT_TIMEOUT_MS}ms ` +
+      `(provider: fakepay, operation: createPaymentSession). No charge was made.`
+  )
+  err.name = "PaymentProviderTimeoutError"
+  next(err)
 }
 
 // Scenario 3 — inventory race (fault: SYSTEM/state).
