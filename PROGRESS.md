@@ -5,8 +5,8 @@ to end users using Dynatrace telemetry. **Read DESIGN.md first** — it holds
 the architecture, the two-phase explanation flow, and the phased plan.
 This file holds the current implementation state.
 
-**Status: Phase 0 ✅, Phase 1 ✅, Phase 2 ✅, Phase 3 ✅ (2026-06-11). Next:
-Phase 4 (end-to-end glue — DESIGN.md §6 Phase 4).**
+**Status: Phase 0–4 ✅ (2026-06-11). Next: Phase 5 (deploy — agent to
+Agent Engine, Medusa to a GCE VM — DESIGN.md §6 Phase 5).**
 
 ## What exists and runs (all local, all Docker except tools)
 
@@ -19,6 +19,9 @@ Phase 4 (end-to-end glue — DESIGN.md §6 Phase 4).**
 | Admin HMR | port 24678 | pinned via HMR_* env vars in compose |
 
 - Start: `docker compose --profile app up -d` (dbs alone: `docker compose up -d postgres redis`)
+- Agent server (required for explanations): `cd agent && .venv/bin/adk
+  api_server --host 0.0.0.0 --port 8001 .` — Medusa reaches it at
+  `host.docker.internal:8001` (`AGENT_BASE_URL` in compose)
 - Place a full test order: `sh scripts/place_order.sh` → prints `ORDER order_…`
 - Publishable key (also in `storefront/.env.local`):
   `pk_98cd485c718acd8f25a926e0cff630f1147eb2664f1edfea98471f444a5f9c34`
@@ -165,16 +168,33 @@ and `pg.Client.connect` to log real errors (deleted; recreate if needed).
   explanation by phase, token usage, tool calls). All tile DQL validated via
   MCP. Re-upload after edits: POST /platform/document/v1/documents.
 
-## Phase 4 scope (next session starts here)
+## Phase 4 — end-to-end glue (done, verified via API; browser click pending)
 
-Per DESIGN.md §6 Phase 4:
-1. Incident module part 2: after persisting the incident, invoke the agent
-   in the background — phase A then phase B (locally via `adk api_server
-   agent/` on the host; Medusa reaches it at `host.docker.internal`), store
-   results in `incident.explanation`, status `pending → preliminary →
-   confirmed`, sanitization deny-list pass before storing.
-2. Storefront `<SomethingWentWrong incidentId/>` component: polls
-   `GET /store/explanations/{id}`, shows preliminary within seconds,
-   upgrades to confirmed (fault classification visually distinct).
-3. ✅ Verify: checkout with SAVE-NULL in the browser → grounded preliminary
-   ~5s → confirmed verdict ~30-60s, no human in the loop.
+- **Explainer client** `backend/.../src/lib/explainer-client.ts`: fire-and-
+  forget two-phase pipeline kicked off by the error handler after the
+  incident row is created. Calls the ADK api_server REST API (session per
+  run: `POST /apps/explainer/users/medusa/sessions/{id}`, then `POST /run`),
+  phase A immediately, phase B after a 15s ingest delay. Results stored in
+  `incident.explanation` + status, with a deny-list `sanitizeUserMessage`
+  backstop (stack frames, file names, internal service names → replace whole
+  message with a safe fallback).
+- **Incident marker**: backend 5xx message is now
+  `An unknown error occurred. [incident:inc_…]` — @medusajs/js-sdk only
+  surfaces the message string of an error body, so the id rides inside it.
+  The storefront parses it back out and never shows it raw.
+- **Storefront**: `<SomethingWentWrong incidentId/>`
+  (`src/modules/common/components/something-went-wrong/`) polls
+  `/api/explanations/{id}` (Next server-side proxy holding the publishable
+  key) every 3s for up to 3min: holding message → preliminary → confirmed,
+  fault badge ("This was on us" / "Partly on us" / "Action needed" /
+  "Still investigating") + preliminary/confirmed indicator. Wired by
+  upgrading the shared checkout `ErrorMessage` component, which covers all
+  three scenarios (discount-code, payment step, place-order button).
+- ✅ Verified end-to-end via API: SAVE-NULL → 500 with marker → storefront
+  proxy serves pending → preliminary (BOTH) ~15s → confirmed (BOTH, high)
+  ~60-90s. No human in the loop.
+- ⚠️ Caveats: agent api_server must be running (see Start above) — without
+  it incidents stay `pending` and the FE keeps the calm holding message
+  (graceful). Server-action error messages pass through in `next dev` only;
+  a production build masks them (would need actions to return errors instead
+  of throwing — Phase 5 polish if deployed FE is wanted).

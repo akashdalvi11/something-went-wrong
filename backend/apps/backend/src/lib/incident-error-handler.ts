@@ -10,6 +10,7 @@ import { SpanStatusCode, trace } from "@opentelemetry/api"
 import IncidentModuleService from "../modules/incident/service"
 import { INCIDENT_MODULE } from "../modules/incident"
 import { activeScenario } from "./chaos"
+import { runExplanationPipeline } from "./explainer-client"
 
 // Incident module, part 1 (DESIGN.md §3.3 / §6 Phase 2): on any unhandled
 // 5xx, capture trace context + the exception in hand, persist an incident
@@ -92,13 +93,26 @@ export function incidentErrorHandler(
       },
     }
 
-    // Placeholder for the Phase 4 agent invocation: for now the incident
-    // JSON is logged and persisted, nothing is awaited.
     logger.error(`incident captured: ${JSON.stringify(incident)}`)
 
     const incidentService = req.scope?.resolve<IncidentModuleService>(INCIDENT_MODULE)
     incidentService
       ?.createIncidents(incident)
+      .then(() => {
+        // Two-phase agent invocation in the background; the user's error
+        // response (below) never waits for any of this.
+        runExplanationPipeline(incidentService, logger as any, {
+          incident_id: incident.id,
+          trace_id: incident.trace_id,
+          created_at: new Date().toISOString(),
+          route: incident.route,
+          method: incident.method,
+          error_type: incident.error_type,
+          error_message: incident.error_message,
+          error_stack: incident.error_stack,
+          request_context: incident.request_context,
+        })
+      })
       .catch((e) => logger.error(`incident persist failed for ${incidentId}: ${e}`))
   } catch (captureError) {
     // capture is best-effort by design; the response below still goes out
@@ -108,7 +122,10 @@ export function incidentErrorHandler(
   res.status(500).json({
     type: "unknown_error",
     code: "unknown_error",
-    message: "An unknown error occurred.",
+    // The marker rides inside the message because @medusajs/js-sdk only
+    // surfaces the message string of an error body — the storefront parses
+    // [incident:…] back out and never displays it raw.
+    message: `An unknown error occurred. [incident:${incidentId}]`,
     incident_id: incidentId,
   })
 }

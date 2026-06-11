@@ -21,6 +21,13 @@ from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
+# Export the agent's own traces to Dynatrace no matter how it is hosted
+# (run_explainer.py, adk web, adk api_server). Idempotent, no-op without
+# the DT_* env vars.
+from .telemetry import setup_tracing  # noqa: E402
+
+setup_tracing()
+
 # Gemini via Vertex AI (ADC credentials, your GCP credits)
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", os.environ.get("GCP_PROJECT_ID", ""))

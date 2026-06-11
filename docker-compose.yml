@@ -46,6 +46,8 @@ services:
       REDIS_URL: redis://redis:6379
       # Flush spans ~1s after a request so failure traces reach Dynatrace fast
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # Explainer agent (adk api_server on the host; Agent Engine in Phase 5)
+      AGENT_BASE_URL: http://host.docker.internal:8001
       # Pin the admin Vite HMR server to a published port; otherwise it picks
       # a random container-only port and the browser's HMR ping loops forever
       HMR_PORT: "24678"
