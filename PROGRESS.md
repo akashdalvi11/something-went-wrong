@@ -44,10 +44,10 @@ Agent Engine, Medusa to a GCE VM — DESIGN.md §6 Phase 5).**
   (scopes incl. `mcp-gateway:servers:*`, storage read), `DT_OTLP_INGEST_TOKEN`,
   `GCP_PROJECT_ID`, `GCP_REGION`. Template: `.env.example`.
 - GCP: project `devpost-hackathon-11`, `aiplatform.googleapis.com` enabled,
-  gcloud authed as akashdalvi115@gmail.com. Vertex calls use
-  `GCP_REGION=us-central1` (from `.env`; ignore the gcloud CLI's us-west1
-  default). ADC done: `gcloud auth application-default login`, quota project
-  set.
+  gcloud authed as akashdalvi115@gmail.com. Region is `us-west1`
+  (`GCP_REGION` in `.env`) — the VM lives there and the agent deploys there
+  too (Phase 5); gemini-2.5-flash verified serving from us-west1. ADC done:
+  `gcloud auth application-default login`, quota project set.
 - Python: ADK 2.2.0 in `agent/.venv` (`google-adk`, `mcp`, `python-dotenv`,
   `opentelemetry-exporter-otlp-proto-http==1.41.1` — pinned because ADK 2.2
   requires opentelemetry <=1.41.1; and ADK 2.x does NOT bundle `mcp`).
