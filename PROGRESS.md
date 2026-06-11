@@ -184,19 +184,41 @@ and `pg.Client.connect` to log real errors (deleted; recreate if needed).
   `An unknown error occurred. [incident:inc_…]` — @medusajs/js-sdk only
   surfaces the message string of an error body, so the id rides inside it.
   The storefront parses it back out and never shows it raw.
-- **Storefront**: `<SomethingWentWrong incidentId/>`
-  (`src/modules/common/components/something-went-wrong/`) polls
-  `/api/explanations/{id}` (Next server-side proxy holding the publishable
-  key) every 3s for up to 3min: holding message → preliminary → confirmed,
-  fault badge ("This was on us" / "Partly on us" / "Action needed" /
-  "Still investigating") + preliminary/confirmed indicator. Wired by
-  upgrading the shared checkout `ErrorMessage` component, which covers all
-  three scenarios (discount-code, payment step, place-order button).
+- **Storefront — chatbot UI (reworked 2026-06-11)**: the app now behaves
+  traditionally — the shared checkout `ErrorMessage` component (covers
+  discount-code, payment step, place-order button) shows only a generic
+  "Something went wrong. Please try again." inline, strips the incident
+  marker, and dispatches a `sww:incident` CustomEvent. A persistent
+  **`<IncidentAssistant/>`** chatbot
+  (`src/modules/common/components/incident-assistant/`, mounted in the root
+  `app/layout.tsx` so it survives navigation) pops up on that event: calming
+  intro bubble immediately, then polls `/api/explanations/{id}` (Next
+  server-side proxy holding the publishable key) every 3s up to 3min and
+  appends the preliminary ("first look") and confirmed bubbles with fault
+  badges ("This was on us" / "Partly on us" / "Action needed" / "Still
+  investigating"), typing indicator while working, minimize-to-launcher with
+  unread dot, conversation persisted in sessionStorage (key `sww-assistant`)
+  across reloads/screen changes. The old inline `<SomethingWentWrong/>`
+  component is deleted.
 - ✅ Verified end-to-end via API: SAVE-NULL → 500 with marker → storefront
-  proxy serves pending → preliminary (BOTH) ~15s → confirmed (BOTH, high)
-  ~60-90s. No human in the loop.
+  proxy serves pending → preliminary (BOTH) ~11s → confirmed (BOTH, high)
+  ~37s. No human in the loop.
+- **Latency rework (2026-06-11)**: phases A and B now run in *parallel*
+  (B never needed A's output) with B's head start cut 15s → 5s — the
+  agent's retry-until-trace-appears loop absorbs ingest variance (prompt
+  now ramps waits: 8s ×2 then 15s, up to 9 attempts, same ~2min budget);
+  FE poll 3s → 2s. Guard: a late preliminary never overwrites a confirmed
+  row. Also **invokeWithRetry** around both agent calls (A: 2 attempts/5s
+  backoff, B: 3 attempts/20s·40s) — Vertex gemini-2.5-flash uses dynamic
+  shared quota and threw a transient 429 RESOURCE_EXHAUSTED (not a credits
+  issue) that previously killed phase B outright. Result: confirmed
+  ~60-90s → ~37s, same verdict quality (BOTH, high, real span evidence).
 - ⚠️ Caveats: agent api_server must be running (see Start above) — without
-  it incidents stay `pending` and the FE keeps the calm holding message
-  (graceful). Server-action error messages pass through in `next dev` only;
+  it incidents stay `pending` and the chatbot keeps its calming intro +
+  typing indicator, closing with a graceful "taking longer than usual" after
+  3min. Server-action error messages pass through in `next dev` only;
   a production build masks them (would need actions to return errors instead
   of throwing — Phase 5 polish if deployed FE is wanted).
+- Note: restarting the agent api_server is required after editing the
+  agent prompt (`agent/explainer/agent.py`) — adk api_server does not
+  hot-reload.

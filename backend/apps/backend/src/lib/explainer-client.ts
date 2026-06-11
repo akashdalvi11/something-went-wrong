@@ -14,7 +14,10 @@ const AGENT_BASE_URL =
   process.env.AGENT_BASE_URL ?? "http://host.docker.internal:8001"
 const APP = "explainer"
 const USER = "medusa"
-const PHASE_B_DELAY_MS = 15_000 // typical minimum ingest lag (DESIGN.md §2)
+// Head start before phase B's first DQL attempt. Spans flush after ~1s
+// (OTEL_BSP_SCHEDULE_DELAY) and the agent's own retry loop absorbs the
+// remaining ingest variance, so this no longer waits out the typical lag.
+const PHASE_B_DELAY_MS = 5_000
 const PHASE_A_TIMEOUT_MS = 60_000
 const PHASE_B_TIMEOUT_MS = 300_000
 
@@ -124,6 +127,34 @@ async function invokeExplainer(
   return JSON.parse(finalText) as ExplainerResult
 }
 
+// Vertex quota throttling (429 → agent run 500) is transient; a single
+// failed call must not cost the user the whole explanation. Fresh session
+// per attempt (invokeExplainer already does that).
+async function invokeWithRetry(
+  phase: "A" | "B",
+  incident: IncidentPayload,
+  logger: Logger,
+  attempts: number,
+  backoffMs: number
+): Promise<ExplainerResult> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await invokeExplainer(phase, incident)
+    } catch (e) {
+      lastError = e
+      if (attempt < attempts) {
+        logger.warn(
+          `explainer phase ${phase} attempt ${attempt}/${attempts} failed ` +
+            `for ${incident.incident_id}, retrying: ${e}`
+        )
+        await new Promise((r) => setTimeout(r, backoffMs * attempt))
+      }
+    }
+  }
+  throw lastError
+}
+
 async function storeResult(
   incidentService: IncidentModuleService,
   incidentId: string,
@@ -142,7 +173,13 @@ async function storeResult(
   })
 }
 
-/** Fire-and-forget two-phase explanation. Never throws. */
+/** Fire-and-forget two-phase explanation. Never throws.
+ *
+ * Phase B does not depend on phase A's output, so both run in parallel —
+ * phase B's first DQL attempt lands while phase A is still generating. The
+ * only ordering rule is that a preliminary result must never overwrite a
+ * confirmed one, guarded in the phase A path below.
+ */
 export function runExplanationPipeline(
   incidentService: IncidentModuleService,
   logger: Logger,
@@ -150,7 +187,17 @@ export function runExplanationPipeline(
 ): void {
   void (async () => {
     try {
-      const preliminary = await invokeExplainer("A", incident)
+      const preliminary = await invokeWithRetry("A", incident, logger, 2, 5_000)
+      const current = await incidentService.retrieveIncident(
+        incident.incident_id
+      )
+      if (current.status === "confirmed") {
+        logger.info(
+          `explanation already confirmed for ${incident.incident_id}; ` +
+            `dropping late preliminary`
+        )
+        return
+      }
       await storeResult(incidentService, incident.incident_id, {
         ...preliminary,
         status: "preliminary",
@@ -160,10 +207,12 @@ export function runExplanationPipeline(
       logger.error(`explainer phase A failed for ${incident.incident_id}: ${e}`)
       // without a preliminary result, phase B can still rescue the incident
     }
+  })()
 
+  void (async () => {
     try {
       await new Promise((r) => setTimeout(r, PHASE_B_DELAY_MS))
-      const confirmed = await invokeExplainer("B", incident)
+      const confirmed = await invokeWithRetry("B", incident, logger, 3, 20_000)
       await storeResult(incidentService, incident.incident_id, confirmed, "preliminary")
       logger.info(
         `explanation ${confirmed.status} stored for ${incident.incident_id} ` +

@@ -1,4 +1,5 @@
 import { getBaseURL } from "@lib/util/env"
+import IncidentAssistant from "@modules/common/components/incident-assistant"
 import { Metadata } from "next"
 import "styles/globals.css"
 
@@ -11,6 +12,7 @@ export default function RootLayout(props: { children: React.ReactNode }) {
     <html lang="en" data-mode="light">
       <body>
         <main className="relative">{props.children}</main>
+        <IncidentAssistant />
       </body>
     </html>
   )

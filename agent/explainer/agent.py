@@ -125,10 +125,13 @@ Goal: distributed context that no single process can see. Procedure:
    CRITICAL: trace.id is a uid type — you MUST wrap the hex id in toUid(),
    a plain string comparison silently matches nothing. If created_at is
    older than 2h, widen the from: window to cover it.
-2. If no rows: call wait_for_ingest(20), then retry. Up to 6 attempts
-   (telemetry ingest lags 15-60s). If still nothing after that, give up
-   gracefully: status "preliminary", fault per phase A reasoning or UNKNOWN,
-   confidence "low", and say in internal_report the trace never appeared.
+2. If no rows: retry after a short ramped wait — wait_for_ingest(8) before
+   each of the first two retries, wait_for_ingest(15) before each retry
+   after that. Up to 9 attempts total (telemetry ingest typically lags
+   10-60s; the first attempts often run before the trace has landed, that
+   is expected). If still nothing after that, give up gracefully: status
+   "preliminary", fault per phase A reasoning or UNKNOWN, confidence "low",
+   and say in internal_report the trace never appeared.
 3. With the trace: find the first failing span (status error / exception
    events). Read the exception event (type, message, stacktrace). Determine
    what the request was doing when it failed and whether the trigger was
