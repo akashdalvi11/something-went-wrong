@@ -44,10 +44,13 @@ Agent Engine, Medusa to a GCE VM — DESIGN.md §6 Phase 5).**
   (scopes incl. `mcp-gateway:servers:*`, storage read), `DT_OTLP_INGEST_TOKEN`,
   `GCP_PROJECT_ID`, `GCP_REGION`. Template: `.env.example`.
 - GCP: project `devpost-hackathon-11`, `aiplatform.googleapis.com` enabled,
-  gcloud authed as akashdalvi115@gmail.com (region config us-west1).
-- Python: ADK 2.2.0 in `agent/.venv` (`google-adk`, `mcp`, `python-dotenv` —
-  note: ADK 2.x does NOT bundle the `mcp` package; it's explicit in
-  `agent/requirements.txt`).
+  gcloud authed as akashdalvi115@gmail.com. Vertex calls use
+  `GCP_REGION=us-central1` (from `.env`; ignore the gcloud CLI's us-west1
+  default). ADC done: `gcloud auth application-default login`, quota project
+  set.
+- Python: ADK 2.2.0 in `agent/.venv` (`google-adk`, `mcp`, `python-dotenv`,
+  `opentelemetry-exporter-otlp-proto-http==1.41.1` — pinned because ADK 2.2
+  requires opentelemetry <=1.41.1; and ADK 2.x does NOT bundle `mcp`).
 - User conventions: runtime deps (Node/Medusa/Postgres) ONLY in Docker; CLI
   tools (gcloud/python/git) native; Python in venv.
 
@@ -144,10 +147,9 @@ and `pg.Client.connect` to log real errors (deleted; recreate if needed).
   ended the span before the error handler could record it).
 - Vertex auth: ADC via `gcloud auth application-default login` (done, quota
   project devpost-hackathon-11). `GCP_PROJECT_ID` now filled in `.env`.
-- ⚠️ Platform Token gap: `query-problems` AND `fetch dt.davis.problems` fail
-  with insufficient permission — token lacks `storage:events:read`. Agent
-  degrades gracefully (notes the gap in internal_report). Add the scope to
-  the Platform Token in the Dynatrace UI to enable the problems cross-check.
+- ~~Platform Token gap (`storage:events:read` missing)~~ — RESOLVED: new
+  token minted with the full scope set (see Extras below); problems
+  cross-check works.
 
 ## Extras (2026-06-11, after Phase 3)
 
