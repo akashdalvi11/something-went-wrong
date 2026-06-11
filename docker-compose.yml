@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: medusa
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  medusa:
+    image: node:22-alpine
+    # NOT /app: the admin UI is served at URL base /app, and Vite mangles
+    # absolute fs paths that share that prefix (strips it as the URL base)
+    working_dir: /srv/medusa
+    # Run medusa directly — `turbo dev` strict env mode strips DATABASE_URL,
+    # REDIS_URL and DT_* vars (no env declarations in turbo.json)
+    command: sh -c "cd apps/backend && npm run dev"
+    volumes:
+      - ./backend:/srv/medusa
+    ports:
+      - "9000:9000"
+      - "24678:24678"
+    env_file: .env
+    environment:
+      # ssl_mode=disable: Medusa treats non-localhost hosts as remote DBs and
+      # forces SSL unless the URL opts out (load-module-database-config.js)
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/medusa?ssl_mode=disable
+      REDIS_URL: redis://redis:6379
+      # Flush spans ~1s after a request so failure traces reach Dynatrace fast
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # Pin the admin Vite HMR server to a published port; otherwise it picks
+      # a random container-only port and the browser's HMR ping loops forever
+      HMR_PORT: "24678"
+      HMR_BIND_HOST: "0.0.0.0"
+      HMR_HOST: "localhost"
+      HMR_CLIENT_PORT: "24678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["app"]
+
+  storefront:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm run dev"
+    volumes:
+      - ./storefront:/app
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      MEDUSA_BACKEND_URL: http://medusa:9000
+    depends_on:
+      - medusa
+    profiles: ["app"]
+
+volumes:
+  pgdata:
