@@ -113,10 +113,17 @@ export function incidentErrorHandler(
           request_context: incident.request_context,
         })
       })
-      .catch((e) => logger.error(`incident persist failed for ${incidentId}: ${e}`))
+      .catch((e) =>
+        logger.error(
+          `incident persist failed for ${incidentId}: ${(e as any)?.stack ?? e}`
+        )
+      )
   } catch (captureError) {
     // capture is best-effort by design; the response below still goes out
-    console.error(`incident capture failed for ${incidentId}: ${captureError}`)
+    console.error(
+      `incident capture failed for ${incidentId}: ` +
+        `${(captureError as any)?.stack ?? captureError}`
+    )
   }
 
   res.status(500).json({

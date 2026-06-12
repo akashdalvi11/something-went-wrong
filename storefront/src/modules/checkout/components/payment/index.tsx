@@ -42,9 +42,12 @@ const Payment = ({
     setError(null)
     setSelectedPaymentMethod(method)
     if (isStripeLike(method)) {
-      await initiatePaymentSession(cart, {
+      const resp: any = await initiatePaymentSession(cart, {
         provider_id: method,
       })
+      if (resp?.error) {
+        setError(resp.error)
+      }
     }
   }
 
@@ -80,9 +83,13 @@ const Payment = ({
         activeSession?.provider_id === selectedPaymentMethod
 
       if (!checkActiveSession) {
-        await initiatePaymentSession(cart, {
+        const resp: any = await initiatePaymentSession(cart, {
           provider_id: selectedPaymentMethod,
         })
+        if (resp?.error) {
+          // surfaced via the existing catch below → setError
+          throw new Error(resp.error)
+        }
       }
 
       if (!shouldInputCard) {

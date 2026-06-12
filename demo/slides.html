@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Something Went Wrong — slides</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --fg: #e6edf3; --dim: #8b949e;
+    --accent: #4ea1ff; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .slide { display: none; height: 100vh; padding: 7vh 9vw; flex-direction: column; justify-content: center; }
+  .slide.active { display: flex; }
+  .kicker { color: var(--accent); text-transform: uppercase; letter-spacing: .18em;
+    font-size: 1.0rem; margin-bottom: 1.2rem; font-weight: 600; }
+  h1 { font-size: 4.2rem; line-height: 1.08; font-weight: 700; }
+  h2 { font-size: 2.6rem; line-height: 1.15; margin-bottom: 2.2rem; font-weight: 700; }
+  .sub { color: var(--dim); font-size: 1.5rem; margin-top: 1.6rem; line-height: 1.5; }
+  ul.big { list-style: none; font-size: 1.45rem; line-height: 1.5; }
+  ul.big li { margin: 1.05rem 0; padding-left: 2.2rem; position: relative; }
+  ul.big li::before { content: "—"; position: absolute; left: 0; color: var(--accent); }
+  .quote { background: var(--panel); border-left: 5px solid var(--bad); border-radius: 8px;
+    padding: 1.4rem 2rem; font-size: 1.55rem; margin: .8rem 0 2rem; }
+  .pill { display: inline-block; border-radius: 999px; padding: .25em .9em; font-size: 1.0rem; font-weight: 600; }
+  .pill.sys { background: #2d1517; color: #ff7b72; }
+  .pill.both { background: #2b2111; color: #e3b341; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 2.2rem; margin-top: .4rem; }
+  .card { background: var(--panel); border: 1px solid #21262d; border-radius: 12px; padding: 1.7rem 2rem; }
+  .card .t { font-size: 1.1rem; color: var(--accent); text-transform: uppercase;
+    letter-spacing: .12em; font-weight: 700; margin-bottom: .8rem; }
+  .card p { font-size: 1.35rem; line-height: 1.5; }
+  .card .when { color: var(--dim); font-size: 1.05rem; margin-top: 1rem; }
+  .mono, .arch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .arch { font-size: 1.2rem; line-height: 1.75; background: var(--panel);
+    border: 1px solid #21262d; border-radius: 12px; padding: 2rem 2.4rem; white-space: pre; }
+  .arch .a { color: var(--accent); } .arch .g { color: var(--good); } .arch .y { color: var(--warn); }
+  .mono.inline { background: var(--panel); border-radius: 6px; padding: .1em .45em; font-size: .92em; }
+  .foot { position: fixed; bottom: 2.2vh; right: 3vw; color: var(--dim); font-size: .95rem; }
+  .hint { position: fixed; bottom: 2.2vh; left: 3vw; color: var(--dim); font-size: .95rem; }
+  .brand { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- 1 — title -->
+<section class="slide active">
+  <div class="kicker">Dynatrace × Google Cloud</div>
+  <h1>Something <span class="brand">Went Wrong</span></h1>
+  <p class="sub">An ecommerce store where the error screen explains itself —
+  built from telemetry the store is already sending to Dynatrace.</p>
+  <p class="sub" style="font-size:1.15rem; margin-top:2.6rem;">
+  Medusa v2 + OpenTelemetry &nbsp;·&nbsp; Dynatrace Grail, queried over MCP &nbsp;·&nbsp;
+  Gemini agent on Vertex AI Agent Engine</p>
+</section>
+
+<!-- 2 — the dilemma (beat 1) -->
+<section class="slide">
+  <h2>We can never account for every failing case</h2>
+  <div class="quote">⚠️ Something went wrong. Please try again.</div>
+  <ul class="big">
+    <li>However advanced the software, some failure always slips through —
+        and not every error can propagate cleanly to the frontend.</li>
+    <li>So the user is left in a dilemma: is it my fault? is it the
+        system's? what should I do now?</li>
+    <li>Every unanswered "something went wrong" leaves a negative
+        impression of the platform in the user's mind.</li>
+  </ul>
+</section>
+
+<!-- 3 — the fix (beat 2) -->
+<section class="slide">
+  <h2>Comfort the user — with accurate information</h2>
+  <ul class="big">
+    <li>Make it clear <em>who</em> is at fault: the user, the system, or
+        both.</li>
+    <li>Make it clear <em>what mitigates</em> the situation right now:
+        retry, fix the input, or wait.</li>
+    <li>Instead of a hope that it might work if tried just a moment
+        later.</li>
+  </ul>
+  <p class="sub">The answers already exist — in the exception the backend
+  just caught, and in the telemetry already flowing into Dynatrace. They
+  just never reach the user.</p>
+</section>
+
+<!-- 4 — the scenario (beat 3a) -->
+<section class="slide">
+  <h2>A store like any other</h2>
+  <p class="sub" style="margin-top:0; margin-bottom:.6rem;">A decently made
+  store application, receiving significant traffic, with Dynatrace
+  observability already in place. A user fills a cart and goes to pay —</p>
+  <svg viewBox="0 0 1200 470" style="width:100%; max-height:56vh"
+       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <defs>
+      <marker id="arrDim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+      </marker>
+      <marker id="arrRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#f85149"/>
+      </marker>
+    </defs>
+
+    <!-- the journey -->
+    <g>
+      <rect x="70" y="30" width="200" height="64" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="170" y="70" text-anchor="middle" font-size="22" fill="#e6edf3">Browse <tspan fill="#3fb950">✓</tspan></text>
+
+      <rect x="345" y="30" width="200" height="64" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="445" y="70" text-anchor="middle" font-size="22" fill="#e6edf3">Cart <tspan fill="#3fb950">✓</tspan></text>
+
+      <rect x="620" y="30" width="200" height="64" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="720" y="70" text-anchor="middle" font-size="22" fill="#e6edf3">Address <tspan fill="#3fb950">✓</tspan></text>
+
+      <rect x="895" y="30" width="200" height="64" rx="12" fill="#161b22" stroke="#f85149" stroke-width="2"/>
+      <text x="995" y="70" text-anchor="middle" font-size="22" fill="#e6edf3">Pay <tspan fill="#f85149">✕</tspan></text>
+
+      <line x1="270" y1="62" x2="341" y2="62" stroke="#8b949e" stroke-width="2" marker-end="url(#arrDim)"/>
+      <line x1="545" y1="62" x2="616" y2="62" stroke="#8b949e" stroke-width="2" marker-end="url(#arrDim)"/>
+      <line x1="820" y1="62" x2="891" y2="62" stroke="#8b949e" stroke-width="2" marker-end="url(#arrDim)"/>
+    </g>
+
+    <!-- the wall -->
+    <path d="M 995 94 V 135 H 600 V 166" fill="none" stroke="#f85149" stroke-width="2.5" marker-end="url(#arrRed)"/>
+    <rect x="290" y="170" width="620" height="70" rx="12" fill="#1a1214" stroke="#f85149" stroke-width="1.5"/>
+    <text x="600" y="213" text-anchor="middle" font-size="23" fill="#ff7b72">⚠️ Something went wrong. Please try again later.</text>
+
+    <!-- what the user can't see -->
+    <path d="M 600 240 V 285 H 235 V 321" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrDim)"/>
+    <path d="M 600 240 V 321" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrDim)"/>
+    <path d="M 600 240 V 285 H 965 V 321" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrDim)"/>
+
+    <g>
+      <rect x="70" y="325" width="330" height="92" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="235" y="365" text-anchor="middle" font-size="20" fill="#e6edf3">Payment service down<tspan fill="#d29922">?</tspan></text>
+      <text x="235" y="395" text-anchor="middle" font-size="15" fill="#8b949e">the provider just stopped answering</text>
+
+      <rect x="435" y="325" width="330" height="92" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="600" y="365" text-anchor="middle" font-size="20" fill="#e6edf3">Sold out that exact moment<tspan fill="#d29922">?</tspan></text>
+      <text x="600" y="395" text-anchor="middle" font-size="15" fill="#8b949e">the last unit raced away mid-checkout</text>
+
+      <rect x="800" y="325" width="330" height="92" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="965" y="365" text-anchor="middle" font-size="20" fill="#e6edf3">App-wide failure<tspan fill="#d29922">?</tspan></text>
+      <text x="965" y="395" text-anchor="middle" font-size="15" fill="#8b949e">nothing is working for anyone</text>
+    </g>
+  </svg>
+  <p class="sub" style="margin-top:.8rem">The causes can be many. The user doesn't know — and can't.</p>
+</section>
+
+<!-- 5 — in comes the agent (beat 3b) -->
+<section class="slide">
+  <h2>In comes the agent — ADK-built, Dynatrace-powered</h2>
+  <p class="sub" style="margin-top:0; margin-bottom:1.6rem;">It recognizes the
+  failure immediately (the backend hands it the exception + the request's
+  trace id) and answers twice:</p>
+  <div class="twocol">
+    <div class="card">
+      <div class="t">Response 1 — comfort, immediately</div>
+      <p>From the failure info alone, no tools. States what failed and the
+      consequence — e.g. "no charge was made" when the timeout happened
+      before authorization.</p>
+      <div class="when">lands in ~5 s · marked "first look"</div>
+    </div>
+    <div class="card">
+      <div class="t">Response 2 — the truth, investigated</div>
+      <p>Analyzes behind the scenes with Dynatrace: DQL against that exact
+      trace, the failing span and stack, open Davis problems — many payment
+      failures at the provider? an inventory issue?</p>
+      <div class="when">lands in ~40 s · clearly says who is at fault</div>
+    </div>
+  </div>
+  <p class="sub">With that, the user can make a sound decision — and doesn't
+  feel unsafe using the website.</p>
+</section>
+
+<!-- 6 — architecture -->
+<section class="slide">
+  <h2>Architecture — nothing here is mocked</h2>
+  <svg viewBox="0 0 1200 545" style="width:100%; max-height:60vh; margin-top:.4rem"
+       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <defs>
+      <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4ea1ff"/>
+      </marker>
+      <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/>
+      </marker>
+      <marker id="arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+      </marker>
+    </defs>
+
+    <!-- boxes -->
+    <g>
+      <rect x="60" y="70" width="240" height="100" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="180" y="113" text-anchor="middle" fill="#4ea1ff" font-size="26" font-weight="700">Storefront</text>
+      <text x="180" y="143" text-anchor="middle" fill="#8b949e" font-size="16">Next.js · assistant chat</text>
+
+      <rect x="470" y="70" width="260" height="100" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="600" y="113" text-anchor="middle" fill="#4ea1ff" font-size="26" font-weight="700">Medusa v2</text>
+      <text x="600" y="143" text-anchor="middle" fill="#8b949e" font-size="16">OTel-instrumented backend</text>
+
+      <rect x="900" y="70" width="250" height="100" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="1025" y="113" text-anchor="middle" fill="#3fb950" font-size="26" font-weight="700">Dynatrace</text>
+      <text x="1025" y="143" text-anchor="middle" fill="#8b949e" font-size="16">Grail · spans · Davis problems</text>
+
+      <rect x="455" y="390" width="290" height="110" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="600" y="435" text-anchor="middle" fill="#d29922" font-size="26" font-weight="700">Explainer agent</text>
+      <text x="600" y="467" text-anchor="middle" fill="#8b949e" font-size="16">Gemini · ADK · Vertex AI Agent Engine</text>
+    </g>
+
+    <!-- user path (blue) -->
+    <line x1="300" y1="100" x2="466" y2="100" stroke="#4ea1ff" stroke-width="2.5" marker-end="url(#arrA)"/>
+    <text x="383" y="88" text-anchor="middle" fill="#e6edf3" font-size="17">checkout</text>
+
+    <line x1="470" y1="145" x2="304" y2="145" stroke="#4ea1ff" stroke-width="2.5" marker-end="url(#arrA)"/>
+    <text x="383" y="178" text-anchor="middle" fill="#8b949e" font-size="16">500 + incident id,</text>
+    <text x="383" y="198" text-anchor="middle" fill="#8b949e" font-size="16">then the chat polls the explanation</text>
+
+    <!-- telemetry (green) -->
+    <line x1="730" y1="100" x2="896" y2="100" stroke="#3fb950" stroke-width="2.5" marker-end="url(#arrG)"/>
+    <text x="813" y="88" text-anchor="middle" fill="#e6edf3" font-size="17">OTLP traces</text>
+
+    <!-- agent flows (amber) -->
+    <line x1="560" y1="170" x2="560" y2="386" stroke="#d29922" stroke-width="2.5" marker-end="url(#arrY)"/>
+    <text x="545" y="262" text-anchor="end" fill="#e6edf3" font-size="17">incident</text>
+    <text x="545" y="284" text-anchor="end" fill="#8b949e" font-size="15">exception + trace id</text>
+    <text x="545" y="304" text-anchor="end" fill="#8b949e" font-size="15">fire-and-forget</text>
+
+    <line x1="640" y1="390" x2="640" y2="174" stroke="#d29922" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#arrY)"/>
+    <text x="657" y="262" fill="#e6edf3" font-size="17">explanation</text>
+    <text x="657" y="284" fill="#8b949e" font-size="15">fault + calm user message,</text>
+    <text x="657" y="304" fill="#8b949e" font-size="15">preliminary then confirmed</text>
+
+    <!-- DQL via MCP (green) -->
+    <path d="M 745 445 H 1025 V 176" fill="none" stroke="#3fb950" stroke-width="2.5" marker-end="url(#arrG)"/>
+    <text x="895" y="431" text-anchor="middle" fill="#e6edf3" font-size="17">DQL via the Dynatrace MCP server</text>
+    <text x="895" y="473" text-anchor="middle" fill="#8b949e" font-size="15">the exact trace, its failing span + stack,</text>
+    <text x="895" y="493" text-anchor="middle" fill="#8b949e" font-size="15">open problems (blast radius)</text>
+  </svg>
+  <p class="sub" style="margin-top:1rem">The error path never waits on the agent — if the agent is
+  down, the user sees the same error page as before. The agent only states
+  what the telemetry shows; if the trace never appears, it says so.</p>
+</section>
+
+<div class="hint">← → to navigate</div>
+<div class="foot"><span id="num">1</span> / <span id="total">6</span></div>
+
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  document.getElementById("total").textContent = slides.length;
+  let i = 0;
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle("active", k === i));
+    document.getElementById("num").textContent = i + 1;
+  }
+  addEventListener("keydown", (e) => {
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) show(i + 1);
+    if (["ArrowLeft", "PageUp"].includes(e.key)) show(i - 1);
+    if (e.key === "Home") show(0);
+  });
+  addEventListener("click", () => show(i + 1));
+</script>
+</body>
+</html>

@@ -252,30 +252,45 @@ export async function initiatePaymentSession(
       revalidateTag(cartCacheTag)
       return resp
     })
-    .catch(medusaError)
+    .catch((e) => {
+      // Return the error instead of throwing: thrown server-action errors
+      // reach the client masked in production builds, which would strip the
+      // [incident:…] marker the error UI relies on.
+      try {
+        medusaError(e)
+      } catch (handled: any) {
+        return { error: handled.message as string }
+      }
+    })
 }
 
 export async function applyPromotions(codes: string[]) {
-  const cartId = await getCartId()
+  try {
+    const cartId = await getCartId()
 
-  if (!cartId) {
-    throw new Error("No existing cart found")
+    if (!cartId) {
+      throw new Error("No existing cart found")
+    }
+
+    const headers = {
+      ...(await getAuthHeaders()),
+    }
+
+    return await sdk.store.cart
+      .update(cartId, { promo_codes: codes }, {}, headers)
+      .then(async () => {
+        const cartCacheTag = await getCacheTag("carts")
+        revalidateTag(cartCacheTag)
+
+        const fulfillmentCacheTag = await getCacheTag("fulfillment")
+        revalidateTag(fulfillmentCacheTag)
+      })
+      .catch(medusaError)
+  } catch (e: any) {
+    // Return the error instead of throwing: thrown server-action errors are
+    // masked in production builds (would strip the [incident:…] marker).
+    return { error: (e?.message ?? String(e)) as string } as any
   }
-
-  const headers = {
-    ...(await getAuthHeaders()),
-  }
-
-  return sdk.store.cart
-    .update(cartId, { promo_codes: codes }, {}, headers)
-    .then(async () => {
-      const cartCacheTag = await getCacheTag("carts")
-      revalidateTag(cartCacheTag)
-
-      const fulfillmentCacheTag = await getCacheTag("fulfillment")
-      revalidateTag(fulfillmentCacheTag)
-    })
-    .catch(medusaError)
 }
 
 export async function applyGiftCard(code: string) {
@@ -326,10 +341,9 @@ export async function submitPromotionForm(
   formData: FormData
 ) {
   const code = formData.get("code") as string
-  try {
-    await applyPromotions([code])
-  } catch (e: any) {
-    return e.message
+  const res: any = await applyPromotions([code])
+  if (res?.error) {
+    return res.error
   }
 }
 
@@ -392,37 +406,47 @@ export async function setAddresses(currentState: unknown, formData: FormData) {
  * @returns The cart object if the order was successful, or null if not.
  */
 export async function placeOrder(cartId?: string) {
-  const id = cartId || (await getCartId())
+  try {
+    const id = cartId || (await getCartId())
 
-  if (!id) {
-    throw new Error("No existing cart found when placing an order")
+    if (!id) {
+      throw new Error("No existing cart found when placing an order")
+    }
+
+    const headers = {
+      ...(await getAuthHeaders()),
+    }
+
+    const cartRes = await sdk.store.cart
+      .complete(id, {}, headers)
+      .then(async (cartRes) => {
+        const cartCacheTag = await getCacheTag("carts")
+        revalidateTag(cartCacheTag)
+        return cartRes
+      })
+      .catch(medusaError)
+
+    if (cartRes?.type === "order") {
+      const countryCode =
+        cartRes.order.shipping_address?.country_code?.toLowerCase()
+
+      const orderCacheTag = await getCacheTag("orders")
+      revalidateTag(orderCacheTag)
+
+      removeCartId()
+      redirect(`/${countryCode}/order/${cartRes?.order.id}/confirmed`)
+    }
+
+    return cartRes.cart
+  } catch (e: any) {
+    // redirect() works by throwing — always let it through.
+    if (typeof e?.digest === "string" && e.digest.startsWith("NEXT_REDIRECT")) {
+      throw e
+    }
+    // Return the error instead of throwing: thrown server-action errors are
+    // masked in production builds (would strip the [incident:…] marker).
+    return { error: (e?.message ?? String(e)) as string } as any
   }
-
-  const headers = {
-    ...(await getAuthHeaders()),
-  }
-
-  const cartRes = await sdk.store.cart
-    .complete(id, {}, headers)
-    .then(async (cartRes) => {
-      const cartCacheTag = await getCacheTag("carts")
-      revalidateTag(cartCacheTag)
-      return cartRes
-    })
-    .catch(medusaError)
-
-  if (cartRes?.type === "order") {
-    const countryCode =
-      cartRes.order.shipping_address?.country_code?.toLowerCase()
-
-    const orderCacheTag = await getCacheTag("orders")
-    revalidateTag(orderCacheTag)
-
-    removeCartId()
-    redirect(`/${countryCode}/order/${cartRes?.order.id}/confirmed`)
-  }
-
-  return cartRes.cart
 }
 
 /**

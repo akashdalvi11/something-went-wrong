@@ -1,0 +1,6 @@
+google-cloud-aiplatform[agent_engines]
+google-adk[a2a]==2.2.0
+mcp
+python-dotenv
+pydantic
+opentelemetry-exporter-otlp-proto-http==1.41.1

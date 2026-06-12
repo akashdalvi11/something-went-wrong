@@ -35,6 +35,11 @@ services:
     command: sh -c "cd apps/backend && npm run dev"
     volumes:
       - ./backend:/srv/medusa
+      # Google credentials for the Agent Engine call: on a GCE VM none are
+      # needed (google-auth-library falls back to the metadata server / the
+      # VM's service account). For local dev, docker-compose.override.yml
+      # (gitignored, auto-merged) mounts your ADC file — see
+      # docker-compose.override.example.yml.
     ports:
       - "9000:9000"
       - "24678:24678"

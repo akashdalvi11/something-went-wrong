@@ -5,8 +5,10 @@ to end users using Dynatrace telemetry. **Read DESIGN.md first** — it holds
 the architecture, the two-phase explanation flow, and the phased plan.
 This file holds the current implementation state.
 
-**Status: Phase 0–4 ✅ (2026-06-11). Next: Phase 5 (deploy — agent to
-Agent Engine, Medusa to a GCE VM — DESIGN.md §6 Phase 5).**
+**Status: Phase 0–5 ✅ (2026-06-12). Fully deployed: agent on Agent Engine,
+store (Medusa + storefront prod build) on GCE VM `sww-store`
+(http://34.82.29.34:8000/dk · backend :9000), verified end-to-end in the
+cloud. Local dev setup still works unchanged.**
 
 ## What exists and runs (all local, all Docker except tools)
 
@@ -19,9 +21,11 @@ Agent Engine, Medusa to a GCE VM — DESIGN.md §6 Phase 5).**
 | Admin HMR | port 24678 | pinned via HMR_* env vars in compose |
 
 - Start: `docker compose --profile app up -d` (dbs alone: `docker compose up -d postgres redis`)
-- Agent server (required for explanations): `cd agent && .venv/bin/adk
-  api_server --host 0.0.0.0 --port 8001 .` — Medusa reaches it at
-  `host.docker.internal:8001` (`AGENT_BASE_URL` in compose)
+- Agent: **deployed on Agent Engine** (see Phase 5 below) — local Medusa
+  calls it because `AGENT_ENGINE_RESOURCE` is set in `.env`. No local agent
+  server needed. To fall back to local: comment that var out and run
+  `cd agent && .venv/bin/adk api_server --host 0.0.0.0 --port 8001 .`
+  (`AGENT_BASE_URL` in compose points at `host.docker.internal:8001`)
 - Place a full test order: `sh scripts/place_order.sh` → prints `ORDER order_…`
 - Publishable key (also in `storefront/.env.local`):
   `pk_98cd485c718acd8f25a926e0cff630f1147eb2664f1edfea98471f444a5f9c34`
@@ -222,3 +226,142 @@ and `pg.Client.connect` to log real errors (deleted; recreate if needed).
 - Note: restarting the agent api_server is required after editing the
   agent prompt (`agent/explainer/agent.py`) — adk api_server does not
   hot-reload.
+
+## Payment-outage Dynatrace problem (2026-06-11, built — one manual step left)
+
+Goal: when payment failures spike, Dynatrace opens a real problem, so the
+agent's phase B `query-problems` cross-check sees an ACTIVE problem and
+concludes "payments are failing for everyone" (SYSTEM, not a one-off).
+
+- **Davis anomaly detector** (settings schema `builtin:davis.anomaly-detectors`,
+  created via `dynatrace/payment_anomaly_detector.py`, idempotent by title
+  "Payment failures — checkout payments failing repeatedly"): DQL counts
+  `medusa-backend` error spans with "payment" in the span name per 1-min
+  bucket (`makeTimeseries count(default: 0), by: {dt.entity.service}`);
+  static threshold >0; **2 violating samples in a 15-min sliding window**
+  opens the problem, 15 dealerting samples keep it open ~15 min past the
+  last failure (the demo window). Event: CUSTOM_ALERT "Payment processing
+  is failing for multiple customers" on the medusa-backend service entity.
+  Note: only spans exist in Grail (no log ingest), so the detector reads
+  spans — same signal the user called "payment failure logs".
+- ⚠️ **BLOCKED on token scopes**: the Platform Token lacks
+  `settings:objects:read`, `settings:objects:write`, `settings:schemas:read`.
+  Add them (Account Management → Platform tokens, or mint new + update
+  `.env`), then run
+  `agent/.venv/bin/python dynatrace/payment_anomaly_detector.py`.
+  (Direct Davis event ingest was the alternative; also blocked —
+  needs `storage:events:write` / classic `events.ingest`.)
+- **Demo warm-up** `scripts/warmup_payment_problem.sh [attempts] [spacing_s]`
+  (default 6×25s): enables `payment_timeout` chaos, builds one cart/payment
+  collection, fires failing payment-session attempts across ≥2 distinct
+  minutes. Problem ACTIVE ~2–3 min after it finishes; do the on-camera
+  failure within the next ~15 min. Script verified (mechanics): 500s
+  recorded, error spans land in Grail. Leaves chaos ON.
+- Demo recipe: warm-up → wait ~3 min (check problem in Dynatrace or via
+  `query-problems`) → storefront checkout payment fails → phase B cites the
+  active problem → SYSTEM verdict "failing for everyone".
+- ✅ Detector created (2026-06-12, scopes added to the Platform Token);
+  verified: a problem opens on warm-up failures.
+
+## Phase 5 (agent half) — deployed to Agent Engine (2026-06-12, verified)
+
+- **Resource**: `projects/119572966637/locations/us-west1/reasoningEngines/4954742442386522112`
+  (display name `explainer`, us-west1, project devpost-hackathon-11).
+- **Deploy/redeploy** (also after any prompt edit in `agent/explainer/agent.py`):
+  `agent/.venv/bin/adk deploy agent_engine --project devpost-hackathon-11
+  --region us-west1 --display_name explainer --temp_folder
+  /tmp/adk-agent-engine-deploy agent/explainer`
+  (pass `--agent_engine_id 4954742442386522112` to update in place; without
+  it a NEW instance is created — then update `AGENT_ENGINE_RESOURCE` in `.env`).
+  Requires `google-cloud-aiplatform[agent_engines]` in the venv (installed).
+- Deploy inputs live in the agent folder: `agent/explainer/.env` (gitignored;
+  DT_* tokens + GCP_* — adk deploy sets these as runtime env vars) and
+  `agent/explainer/requirements.txt`. **Gotcha**: the Agent Engine container
+  runs `adk api_server --a2a`, so requirements need `google-adk[a2a]` — plain
+  google-adk fails at start with ModuleNotFoundError: a2a ("failed to start
+  and cannot serve traffic"; logs: `gcloud logging read
+  'resource.type="aiplatform.googleapis.com/ReasoningEngine"'`).
+- **Medusa → Agent Engine**: `explainer-client.ts` now branches on
+  `AGENT_ENGINE_RESOURCE` (set in root `.env`): POST
+  `https://us-west1-aiplatform.googleapis.com/v1/<resource>:streamQuery?alt=sse`
+  with `{class_method: "async_stream_query", input: {user_id, message}}`,
+  bearer from `google-auth-library` (ADC; `~/.config/gcloud/application_
+  default_credentials.json` mounted read-only at `/gcloud/adc.json` in
+  compose, `GOOGLE_APPLICATION_CREDENTIALS` points there). Fresh session per
+  call (no session_id → auto-created). **Gotcha**: despite `alt=sse` the
+  response is newline-delimited JSON events with NO `data:` prefix — the
+  parser treats the prefix as optional.
+- ✅ Verified end-to-end (local Medusa → deployed agent): SAVE-NULL incident
+  → preliminary (BOTH) ~5s → confirmed (BOTH) ~40s. Local adk api_server no
+  longer required.
+
+## Phase 5 (store half) — GCE VM deploy (2026-06-12, verified)
+
+- **VM**: `sww-store`, us-west1-b, e2-standard-2, 40GB, IP **34.82.29.34**,
+  SA `sww-medusa-vm@…` with `roles/aiplatform.user`, scopes cloud-platform,
+  firewall `sww-web` (tcp 8000/9000, tag sww-store). Docker via get.docker.com
+  startup script. Repo at `~/sww`; stack:
+  `sudo docker compose -f docker-compose.yml -f deploy/docker-compose.gce.yml
+  --profile app up -d` (gce override = storefront `npm run start`, prod build).
+  The user's pre-existing `first-virtual-machine` was left untouched.
+- **Auth**: no ADC on the VM — google-auth-library falls back to the metadata
+  server (SA). Locally the ADC mount lives in gitignored
+  `docker-compose.override.yml` (template: docker-compose.override.example.yml).
+- **Data**: local DB pg_dump/pg_restore (NOT re-seeded) so the publishable
+  key in `storefront/.env.local` keeps matching the DB. VM env tweaks:
+  `NEXT_PUBLIC_BASE_URL=http://34.82.29.34:8000`, STORE/ADMIN/AUTH_CORS set.
+- **Prod-safe server actions**: `initiatePaymentSession`, `placeOrder` AND
+  `applyPromotions` now return `{ error }` instead of throwing (Next prod
+  masks thrown server-action messages — the browser then shows "An error
+  occurred in the Server Components render…" and the `[incident:…]` marker
+  is lost, so no chatbot). Callers adapted: payment/index.tsx,
+  payment-button/index.tsx, discount-code/index.tsx (it calls
+  applyPromotions DIRECTLY, not via submitPromotionForm — found only by
+  testing the deployed build; the real error + digest was in
+  `sudo docker logs sww-storefront-1`). All three chaos scenarios' UI paths
+  are covered.
+- ⚠️ **LANDMINE (cost ~2h)**: copying the repo with macOS `tar` shipped
+  AppleDouble `._*` files; Linux extraction materialized them. Medusa's
+  module loader dynamic-imports EVERY file in a module's `models/` dir and
+  `.catch(() => [])`s the whole directory on any failure — `._incident.ts`
+  (binary) threw, models came back empty, **no connection loader → module
+  `manager` undefined → every incident insert died with "Cannot read
+  properties of undefined (reading 'fork')" while the rest of the store
+  worked perfectly.** Routes survived because the api loader matches exact
+  `route.ts` names. Fix: `find ~/sww -name "._*" -delete` + restart. Future
+  copies: `COPYFILE_DISABLE=1 tar czf …` from macOS.
+- ✅ Verified on the VM: SAVE-NULL → preliminary ~20s → confirmed (BOTH)
+  ~40s through Agent Engine with metadata-server auth.
+- ⚠️ **LANDMINE 2 (cookies)**: the starter sets `_medusa_cart_id` /
+  `_medusa_jwt` / locale cookies with `secure: NODE_ENV === "production"`.
+  A prod build served over plain http (the VM) → browsers silently drop
+  Secure cookies → add-to-cart "does nothing" (cart created server-side,
+  id never persisted) and login breaks; the DB looks innocent. Fixed in
+  cookies.ts + locale-actions.ts: `secure:
+  !!process.env.NEXT_PUBLIC_BASE_URL?.startsWith("https")`. Storefront
+  rebuilt on the VM (rebuild required — prod build bakes server actions).
+
+## Message calibration v2 (2026-06-12, deployed + verified)
+
+- Phase A = acknowledgment only: what the user was doing + safety
+  consequence; **no remedies** (those belong to the confirmed verdict), no
+  "I'll confirm shortly" (the chat UI adds that line itself).
+- Phase B = verdict voice: opens with what was established, hedge words
+  banned (incl. "unexpected"), must not read as a reworded preliminary;
+  carries the next step; BOTH = user fix + our admission.
+- Charge/card reassurance only in payment incidents (was bleeding into
+  promo verdicts).
+- Redeploy after prompt edits:
+  `agent/.venv/bin/adk deploy agent_engine --project devpost-hackathon-11
+  --region us-west1 --display_name explainer --agent_engine_id
+  4954742442386522112 --temp_folder /tmp/adk-agent-engine-deploy
+  agent/explainer`
+
+## Storefront rebrand (2026-06-12)
+
+- "Medusa Store" → "Something Store" everywhere user-visible (nav, footer,
+  side menu, checkout layout, register/login/profile copy, page metadata
+  titles). Home metadata title/description rebranded; hero is now
+  "Something Store / The store that tells you what went wrong" (GitHub
+  starter button removed); footer "Medusa" link column renamed "Resources".
+  "Powered by Medusa & Next.js" credit (MedusaCTA) intentionally kept.

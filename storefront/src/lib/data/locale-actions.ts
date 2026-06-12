@@ -28,7 +28,7 @@ export const setLocaleCookie = async (locale: string) => {
     maxAge: 60 * 60 * 24 * 365, // 1 year
     httpOnly: false, // Allow client-side access
     sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
+    secure: !!process.env.NEXT_PUBLIC_BASE_URL?.startsWith("https"),
   })
 }
 

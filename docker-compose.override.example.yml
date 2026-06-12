@@ -1,0 +1,11 @@
+# Local-dev only: copy to docker-compose.override.yml (gitignored; compose
+# auto-merges it). Mounts your gcloud ADC into the medusa container so the
+# explainer client can call the deployed Agent Engine from localhost.
+# On the GCE VM there is NO override file — google-auth-library uses the
+# VM's service account via the metadata server instead.
+services:
+  medusa:
+    volumes:
+      - ~/.config/gcloud/application_default_credentials.json:/gcloud/adc.json:ro
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /gcloud/adc.json

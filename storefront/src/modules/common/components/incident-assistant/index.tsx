@@ -36,10 +36,12 @@ const STORAGE_KEY = "sww-assistant"
 const POLL_INTERVAL_MS = 2_000
 const POLL_BUDGET_MS = 3 * 60_000
 
-const INTRO_MESSAGE =
-  "Hi — I noticed something just went wrong. I'm sorry about that. " +
-  "I'm already looking into what happened and I'll explain it here in a " +
-  "moment. You can keep browsing — I'll stay in this corner."
+// The preliminary ("first look") bubble is an early read while the deeper
+// investigation is still running — this note sets that expectation so the
+// confirmed message arriving later reads as a natural follow-up.
+const BACKGROUND_CHECK_NOTE =
+  "I'm still running a deeper check in the background — I'll confirm what " +
+  "happened in a moment."
 
 const TIMEOUT_MESSAGE =
   "This one is taking longer than usual to pin down. It's safe to retry or " +
@@ -82,6 +84,11 @@ const ChatBubble = ({ message }: { message: ChatMessage }) => {
         </div>
       )}
       <p className="text-small-regular text-ui-fg-base">{message.text}</p>
+      {message.tag === "first look" && (
+        <p className="pt-1 text-xsmall-regular italic text-ui-fg-muted">
+          {BACKGROUND_CHECK_NOTE}
+        </p>
+      )}
     </div>
   )
 }
@@ -136,10 +143,13 @@ const IncidentAssistant = () => {
         if (prev?.incidentId === incidentId) {
           return prev
         }
+        // No intro bubble — the inline "something went wrong" under the form
+        // already acknowledges the failure. The chatbot's working header plus
+        // typing indicator is the calming presence until the first look lands.
         return {
           incidentId,
           startedAt: Date.now(),
-          messages: [{ key: `${incidentId}-intro`, text: INTRO_MESSAGE }],
+          messages: [],
           done: false,
         }
       })

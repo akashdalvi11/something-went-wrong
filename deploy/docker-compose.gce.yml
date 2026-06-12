@@ -1,0 +1,9 @@
+# GCE VM overrides: run the storefront as a production build (next start).
+# Usage on the VM (from the repo root):
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.gce.yml \
+#     --profile app up -d
+# Note: no docker-compose.override.yml here — google-auth-library uses the
+# VM's service account via the metadata server for the Agent Engine call.
+services:
+  storefront:
+    command: sh -c "npm run start"

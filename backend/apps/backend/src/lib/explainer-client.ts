@@ -1,4 +1,5 @@
 import { Logger } from "@medusajs/framework/types"
+import { GoogleAuth } from "google-auth-library"
 import IncidentModuleService from "../modules/incident/service"
 
 // Incident module, part 2 (DESIGN.md §3.3): background invocation of the
@@ -6,10 +7,14 @@ import IncidentModuleService from "../modules/incident/service"
 // after Dynatrace ingest). Fire-and-forget from the error path; every step
 // here is best-effort and must never throw out of the pipeline.
 //
-// Locally the agent runs via `adk api_server --host 0.0.0.0 --port 8001 agent`
-// on the host; in Phase 5 this base URL becomes the Agent Engine REST
-// endpoint (with an ADC bearer token).
+// Two interchangeable agent backends:
+// - AGENT_ENGINE_RESOURCE set (projects/…/locations/…/reasoningEngines/…):
+//   the deployed Vertex AI Agent Engine, called over REST :streamQuery with
+//   an ADC bearer token (Phase 5).
+// - otherwise AGENT_BASE_URL: a local `adk api_server --host 0.0.0.0
+//   --port 8001 agent` on the host.
 
+const AGENT_ENGINE_RESOURCE = process.env.AGENT_ENGINE_RESOURCE
 const AGENT_BASE_URL =
   process.env.AGENT_BASE_URL ?? "http://host.docker.internal:8001"
 const APP = "explainer"
@@ -70,11 +75,93 @@ export function sanitizeUserMessage(message: unknown): string {
   return trimmed
 }
 
+// Lazy singleton: GoogleAuth caches and refreshes ADC tokens internally.
+let googleAuth: GoogleAuth | null = null
+function getGoogleAuth(): GoogleAuth {
+  if (!googleAuth) {
+    googleAuth = new GoogleAuth({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+    })
+  }
+  return googleAuth
+}
+
+// Agent Engine REST: async_stream_query creates a fresh session per call
+// (no session_id passed) and streams ADK events as SSE `data:` lines; the
+// last text part is the structured JSON.
+async function invokeViaAgentEngine(
+  phase: "A" | "B",
+  incident: IncidentPayload,
+  timeout: number
+): Promise<ExplainerResult> {
+  const resource = AGENT_ENGINE_RESOURCE!
+  const region = resource.match(/locations\/([^/]+)\//)?.[1]
+  if (!region) {
+    throw new Error(`cannot parse region from AGENT_ENGINE_RESOURCE: ${resource}`)
+  }
+  const token = await getGoogleAuth().getAccessToken()
+
+  const res = await fetch(
+    `https://${region}-aiplatform.googleapis.com/v1/${resource}:streamQuery?alt=sse`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        class_method: "async_stream_query",
+        input: {
+          user_id: USER,
+          message: JSON.stringify({ phase, incident }),
+        },
+      }),
+      signal: AbortSignal.timeout(timeout),
+    }
+  )
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 300)
+    throw new Error(`agent engine query failed: ${res.status} ${detail}`)
+  }
+
+  const body = await res.text()
+  let finalText: string | undefined
+  // One JSON event per line; Agent Engine omits the SSE "data:" prefix even
+  // with alt=sse (verified against the live endpoint), so treat it as optional.
+  for (const rawLine of body.split("\n")) {
+    const line = (
+      rawLine.startsWith("data:") ? rawLine.slice(5) : rawLine
+    ).trim()
+    if (!line) {
+      continue
+    }
+    try {
+      const event = JSON.parse(line) as {
+        content?: { parts?: Array<{ text?: string }> }
+      }
+      for (const part of event.content?.parts ?? []) {
+        if (part.text?.trim()) {
+          finalText = part.text
+        }
+      }
+    } catch {
+      // partial/non-JSON SSE line — ignore
+    }
+  }
+  if (!finalText) {
+    throw new Error("agent engine returned no text response")
+  }
+  return JSON.parse(finalText) as ExplainerResult
+}
+
 async function invokeExplainer(
   phase: "A" | "B",
   incident: IncidentPayload
 ): Promise<ExplainerResult> {
   const timeout = phase === "A" ? PHASE_A_TIMEOUT_MS : PHASE_B_TIMEOUT_MS
+  if (AGENT_ENGINE_RESOURCE) {
+    return invokeViaAgentEngine(phase, incident, timeout)
+  }
   // Fresh session per run: ADK sessions accumulate history, and a stale
   // session would pollute a retriggered explanation.
   const sessionId = `${incident.incident_id}-${phase}-${Date.now()}`
